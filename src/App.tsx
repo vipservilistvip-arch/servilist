@@ -779,6 +779,17 @@ function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {serversLoading && (
+          <div className="flex justify-center mb-6">
+            <Clock className="w-8 h-8 text-blue-500 animate-spin" />
+          </div>
+        )}
+        {serversError && (
+          <div className="mb-6 p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl flex items-center gap-3">
+            <ShieldAlert className="w-5 h-5" />
+            <p className="text-sm font-medium">{serversError}</p>
+          </div>
+        )}
         {/* Stats Summary */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
