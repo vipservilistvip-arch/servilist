@@ -13,7 +13,8 @@ import {
   Trash2,
   Edit2,
   Wifi,
-  WifiOff
+  WifiOff,
+  UserPlus
 } from 'lucide-react'
 
 interface ServerData {
@@ -49,56 +50,18 @@ interface PingDashboardEntry {
   ping: PingStatus
 }
 
-// Safe JSON parse with fallback
-function safeParse<T>(jsonString: string, fallback: T): T {
-  try {
-    return JSON.parse(jsonString) as T
-  } catch {
-    console.error('Failed to parse JSON')
-    return fallback
-  }
+interface AuthUser {
+  id: number
+  name: string
+  email: string
+  createdAt: string
 }
 
-// Mock data for initial look
-const mockData: ServerData[] = [
-  {
-    id: '1',
-    name: 'SRV-DB-PROD',
-    client: 'Posto Central',
-    ip: '10.0.0.15',
-    port: '3306',
-    endpoint: 'db.postocentral.local',
-    referencePoint: 'Matriz - Sala do CPD, 2o andar',
-    mikrotikUser: 'admin',
-    mikrotikPassword: 'admin123',
-    os: 'Windows Server 2019',
-    hardware: '32GB RAM, 8 vCPU, 1TB SSD',
-    status: 'online',
-    backupStatus: 'success',
-    lastBackup: '2026-02-10 22:00',
-    notes: 'Banco de dados principal do ERP'
-  },
-  {
-    id: '2',
-    name: 'SRV-APP-WEB',
-    client: 'Mercado Silva',
-    ip: '192.168.1.50',
-    port: '80',
-    endpoint: 'app.mercadosilva.local',
-    referencePoint: 'Filial Centro - Rack proximo ao caixa',
-    mikrotikUser: 'suporte',
-    mikrotikPassword: 'mk@2026',
-    os: 'Ubuntu 22.04 LTS',
-    hardware: '8GB RAM, 2 vCPU, 240GB SSD',
-    status: 'online',
-    backupStatus: 'failed',
-    lastBackup: '2026-02-09 03:00',
-    notes: 'Servidor de hospedagem do site e API'
-  }
-]
+type AuthMode = 'login' | 'register'
 
 const PING_TIMEOUT_MS = 1500
 const PING_ATTEMPTS = 3
+const API_BASE_URL = import.meta.env.VITE_API_URL || ''
 
 function normalizeProbeUrl(url: string): string {
   return url.endsWith('/') ? url.slice(0, -1) : url
@@ -191,10 +154,7 @@ async function pingServer(ip: string, port: string): Promise<PingStatus> {
 }
 
 function App() {
-  const [servers, setServers] = useState<ServerData[]>(() => {
-    const saved = localStorage.getItem('servlist_servers')
-    return saved ? safeParse(saved, []) : mockData
-  })
+  const [servers, setServers] = useState<ServerData[]>([])
   
   const [searchTerm, setSearchTerm] = useState('')
   const [isAddingServer, setIsAddingServer] = useState(false)
@@ -209,9 +169,92 @@ function App() {
     mikrotikPassword: ''
   })
   const [editingServer, setEditingServer] = useState<ServerData | null>(null)
+  const [isRegisteringUser, setIsRegisteringUser] = useState(false)
   const [pingStatus, setPingStatus] = useState<{ [key: string]: PingStatus }>({})
   const [isPinging, setIsPinging] = useState(false)
   const [autoPingEnabled, setAutoPingEnabled] = useState(false)
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [authMode, setAuthMode] = useState<AuthMode>('login')
+  const [authError, setAuthError] = useState('')
+  const [authSubmitting, setAuthSubmitting] = useState(false)
+  const [serversLoading, setServersLoading] = useState(false)
+  const [serversError, setServersError] = useState('')
+  const [authForm, setAuthForm] = useState({
+    name: '',
+    email: '',
+    password: '',
+    confirmPassword: '',
+  })
+
+  const authCardTitle = authMode === 'login' ? 'Entrar no ServList' : 'Criar conta'
+
+  const apiFetch = async <T,>(path: string, options: RequestInit = {}): Promise<T> => {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options.headers || {}),
+      },
+    })
+
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new Error(payload.error || 'Erro inesperado.')
+    }
+    return payload as T
+  }
+
+  useEffect(() => {
+    let mounted = true
+
+    const loadCurrentUser = async () => {
+      try {
+        const data = await apiFetch<{ user: AuthUser | null }>('/api/auth/me', { method: 'GET' })
+        if (mounted) {
+          setAuthUser(data.user)
+        }
+      } catch {
+        if (mounted) {
+          setAuthUser(null)
+        }
+      } finally {
+        if (mounted) {
+          setAuthLoading(false)
+        }
+      }
+    }
+
+    loadCurrentUser()
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  const loadServers = async () => {
+    setServersLoading(true)
+    setServersError('')
+    try {
+      const data = await apiFetch<{ servers: ServerData[] }>('/api/servers', { method: 'GET' })
+      setServers(data.servers)
+      setPingStatus({})
+    } catch (error) {
+      setServersError(error instanceof Error ? error.message : 'Falha ao carregar servidores.')
+      setServers([])
+    } finally {
+      setServersLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!authUser) {
+      setServers([])
+      setPingStatus({})
+      return
+    }
+    loadServers()
+  }, [authUser])
 
   // Auto ping functionality every minute
   useEffect(() => {
@@ -234,11 +277,6 @@ function App() {
     }
   }, [autoPingEnabled, servers])
 
-  // Save to localStorage whenever servers change
-  useEffect(() => {
-    localStorage.setItem('servlist_servers', JSON.stringify(servers))
-  }, [servers])
-
   // Handle ESC key to close modal
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -251,7 +289,11 @@ function App() {
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [isAddingServer])
 
-  const handleAddServer = () => {
+  const resetServerForm = () => {
+    setNewServer({ status: 'online', backupStatus: 'pending', port: '80', endpoint: '', referencePoint: '', mikrotikUser: '', mikrotikPassword: '' })
+  }
+
+  const handleAddServer = async () => {
     if (newServer.name && newServer.client) {
       const server: ServerData = {
         id: crypto.randomUUID(),
@@ -270,39 +312,54 @@ function App() {
         lastBackup: new Date().toLocaleString(),
         notes: newServer.notes || ''
       }
-      const updated = [...servers, server]
-      setServers(updated)
+      try {
+        const data = await apiFetch<{ server: ServerData }>('/api/servers', {
+          method: 'POST',
+          body: JSON.stringify(server),
+        })
+        setServers([data.server, ...servers])
+      } catch (error) {
+        setServersError(error instanceof Error ? error.message : 'Falha ao cadastrar servidor.')
+        return
+      }
       setIsAddingServer(false)
-      setNewServer({ status: 'online', backupStatus: 'pending', port: '80', endpoint: '', referencePoint: '', mikrotikUser: '', mikrotikPassword: '' })
+      resetServerForm()
     }
   }
 
-  const handleEditServer = () => {
+  const handleEditServer = async () => {
     if (editingServer && newServer.name && newServer.client) {
-      const updated = servers.map(server => 
-        server.id === editingServer.id 
-          ? { 
-              ...server, 
-              name: newServer.name as string, 
-              client: newServer.client as string, 
-              ip: newServer.ip || 'N/A', 
-              port: newServer.port || '80',
-              endpoint: newServer.endpoint || 'N/A',
-              referencePoint: newServer.referencePoint || '',
-              mikrotikUser: newServer.mikrotikUser || '',
-              mikrotikPassword: newServer.mikrotikPassword || '',
-              os: newServer.os || 'N/A', 
-              hardware: newServer.hardware || 'N/A', 
-              status: newServer.status || 'online', 
-              backupStatus: newServer.backupStatus || 'pending', 
-              notes: newServer.notes || '' 
-            }
-          : server
-      )
-      setServers(updated)
+      const payload: ServerData = {
+        ...editingServer,
+        name: newServer.name as string,
+        client: newServer.client as string,
+        ip: newServer.ip || 'N/A',
+        port: newServer.port || '80',
+        endpoint: newServer.endpoint || 'N/A',
+        referencePoint: newServer.referencePoint || '',
+        mikrotikUser: newServer.mikrotikUser || '',
+        mikrotikPassword: newServer.mikrotikPassword || '',
+        os: newServer.os || 'N/A',
+        hardware: newServer.hardware || 'N/A',
+        status: newServer.status || 'online',
+        backupStatus: newServer.backupStatus || 'pending',
+        notes: newServer.notes || '',
+      }
+
+      try {
+        const data = await apiFetch<{ server: ServerData }>(`/api/servers/${editingServer.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        })
+        setServers(servers.map((server) => (server.id === editingServer.id ? data.server : server)))
+      } catch (error) {
+        setServersError(error instanceof Error ? error.message : 'Falha ao atualizar servidor.')
+        return
+      }
+
       setIsEditingServer(false)
       setEditingServer(null)
-      setNewServer({ status: 'online', backupStatus: 'pending', port: '80', endpoint: '', referencePoint: '', mikrotikUser: '', mikrotikPassword: '' })
+      resetServerForm()
     }
   }
 
@@ -381,10 +438,13 @@ function App() {
     return `${minutes}m ${seconds}s`
   }
 
-  const deleteServer = (id: string) => {
-    const updated = servers.filter(s => s.id !== id)
-    setServers(updated)
-    localStorage.setItem('servlist_servers', JSON.stringify(updated))
+  const deleteServer = async (id: string) => {
+    try {
+      await apiFetch(`/api/servers/${id}`, { method: 'DELETE' })
+      setServers(servers.filter((server) => server.id !== id))
+    } catch (error) {
+      setServersError(error instanceof Error ? error.message : 'Falha ao excluir servidor.')
+    }
   }
 
   const filteredServers = servers.filter(s => 
@@ -433,6 +493,221 @@ function App() {
     return 'bg-rose-100 text-rose-700'
   }
 
+  const resetAuthForm = () => {
+    setAuthForm({
+      name: '',
+      email: '',
+      password: '',
+      confirmPassword: '',
+    })
+  }
+
+  const handleAuthSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setAuthError('')
+
+    if (!authForm.email || !authForm.password) {
+      setAuthError('Email e senha sao obrigatorios.')
+      return
+    }
+
+    if (authMode === 'register') {
+      if (!authForm.name.trim()) {
+        setAuthError('Informe o nome para cadastro.')
+        return
+      }
+      if (authForm.password !== authForm.confirmPassword) {
+        setAuthError('As senhas nao conferem.')
+        return
+      }
+    }
+
+    setAuthSubmitting(true)
+    try {
+      const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/register'
+      const payload = authMode === 'login'
+        ? {
+            email: authForm.email,
+            password: authForm.password,
+          }
+        : {
+            name: authForm.name.trim(),
+            email: authForm.email,
+            password: authForm.password,
+          }
+
+      const data = await apiFetch<{ user: AuthUser }>(endpoint, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+
+      setAuthUser(data.user)
+      resetAuthForm()
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Falha de autenticacao.')
+    } finally {
+      setAuthSubmitting(false)
+    }
+  }
+
+  const handleInternalRegister = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setAuthError('')
+
+    if (!authForm.name.trim() || !authForm.email || !authForm.password) {
+      setAuthError('Todos os campos sao obrigatorios.')
+      return
+    }
+
+    if (authForm.password !== authForm.confirmPassword) {
+      setAuthError('As senhas nao conferem.')
+      return
+    }
+
+    setAuthSubmitting(true)
+    try {
+      await apiFetch('/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: authForm.name.trim(),
+          email: authForm.email,
+          password: authForm.password,
+        }),
+      })
+
+      // Como o backend faz login automatico ao registrar, precisamos recarregar o usuario
+      // para garantir que a sessao ainda e valida ou refletir a mudanca se desejado.
+      // No entanto, para "criar um usuario para outro", o ideal seria um endpoint admin.
+      // Por enquanto, apenas fechamos o modal e limpamos o formulário.
+      setIsRegisteringUser(false)
+      resetAuthForm()
+      alert('Usuário cadastrado com sucesso!')
+      
+      // Opcional: Recarregar a página para garantir que a sessão do admin não foi perdida
+      // (embora o backend atual limpe a sessão ao registrar novo usuário).
+      window.location.reload()
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Falha ao cadastrar usuário.')
+    } finally {
+      setAuthSubmitting(false)
+    }
+  }
+
+  const handleLogout = async () => {
+    try {
+      await apiFetch('/api/auth/logout', { method: 'POST' })
+    } catch {
+      // Ignora erro para garantir saida local.
+    }
+
+    setAuthUser(null)
+    setAuthMode('login')
+  }
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-slate-50 text-slate-900 flex items-center justify-center">
+        <div className="bg-white border border-slate-200 rounded-xl px-6 py-4 shadow-sm">
+          Carregando sessao...
+        </div>
+      </div>
+    )
+  }
+
+  if (!authUser) {
+    return (
+      <div className="min-h-screen bg-slate-100 text-slate-900 flex items-center justify-center px-4">
+        <div className="w-full max-w-md bg-white border border-slate-200 rounded-2xl shadow-sm p-6 sm:p-8">
+          <div className="mb-6">
+            <h1 className="text-2xl font-bold tracking-tight">{authCardTitle}</h1>
+            <p className="text-sm text-slate-500 mt-1">
+              {authMode === 'login' ? 'Acesse para gerenciar seus servidores.' : 'Cadastre um usuario para comecar.'}
+            </p>
+          </div>
+
+          <form className="space-y-4" onSubmit={handleAuthSubmit}>
+            {authMode === 'register' && (
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Nome</label>
+                <input
+                  type="text"
+                  value={authForm.name}
+                  onChange={(e) => setAuthForm({ ...authForm, name: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Seu nome"
+                />
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Email</label>
+              <input
+                type="email"
+                value={authForm.email}
+                onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="voce@empresa.com"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Senha</label>
+              <input
+                type="password"
+                value={authForm.password}
+                onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Minimo de 8 caracteres"
+              />
+            </div>
+
+            {authMode === 'register' && (
+              <div>
+                <label className="block text-xs font-semibold uppercase text-slate-500 mb-1">Confirmar senha</label>
+                <input
+                  type="password"
+                  value={authForm.confirmPassword}
+                  onChange={(e) => setAuthForm({ ...authForm, confirmPassword: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Repita a senha"
+                />
+              </div>
+            )}
+
+            {authError && (
+              <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 rounded-lg px-3 py-2">
+                {authError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={authSubmitting}
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 text-white py-2 rounded-lg text-sm font-medium transition-colors"
+            >
+              {authSubmitting ? 'Aguarde...' : authMode === 'login' ? 'Entrar' : 'Cadastrar'}
+            </button>
+          </form>
+
+          <div className="mt-4 text-sm text-slate-600">
+            {authMode === 'login' ? 'Nao tem conta?' : 'Ja possui conta?'}{' '}
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode(authMode === 'login' ? 'register' : 'login')
+                setAuthError('')
+                resetAuthForm()
+              }}
+              className="text-blue-600 hover:text-blue-700 font-semibold"
+            >
+              {authMode === 'login' ? 'Cadastre-se' : 'Entrar'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
       {/* Header */}
@@ -446,6 +721,10 @@ function App() {
           </div>
           
             <div className="flex items-center gap-4">
+            <div className="hidden md:flex items-center gap-2 text-sm text-slate-600 bg-slate-100 rounded-full px-3 py-1.5">
+              <User className="w-4 h-4" />
+              <span>{authUser.name}</span>
+            </div>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
               <input 
@@ -476,11 +755,24 @@ function App() {
               {autoPingEnabled ? 'Auto-Ping Ativo' : 'Auto-Ping Inativo'}
             </button>
             <button 
+              onClick={() => setIsRegisteringUser(true)}
+              className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm border border-slate-200"
+            >
+              <UserPlus className="w-4 h-4" />
+              Novo Usuário
+            </button>
+            <button 
               onClick={() => setIsAddingServer(true)}
               className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm"
             >
               <Plus className="w-4 h-4" />
               Novo Servidor
+            </button>
+            <button 
+              onClick={handleLogout}
+              className="bg-slate-700 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
+            >
+              Sair
             </button>
           </div>
         </div>
@@ -946,6 +1238,118 @@ function App() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Internal User Registration Modal */}
+      {isRegisteringUser && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-blue-50 rounded-lg">
+                  <UserPlus className="w-5 h-5 text-blue-600" />
+                </div>
+                <h2 className="text-lg font-bold text-slate-800">Novo Usuário</h2>
+              </div>
+              <button 
+                onClick={() => {
+                  setIsRegisteringUser(false)
+                  resetAuthForm()
+                  setAuthError('')
+                }}
+                className="text-slate-400 hover:text-slate-600 transition-colors p-1 hover:bg-slate-100 rounded-full"
+                aria-label="Fechar modal"
+              >
+                <Plus className="w-6 h-6 rotate-45" />
+              </button>
+            </div>
+            
+            <form onSubmit={handleInternalRegister} className="p-6 space-y-4">
+              {authError && (
+                <div className="p-3 bg-rose-50 border border-rose-100 rounded-lg text-rose-600 text-sm flex items-center gap-2 animate-shake">
+                  <div className="w-1.5 h-1.5 bg-rose-500 rounded-full" />
+                  {authError}
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Nome Completo</label>
+                <input 
+                  type="text" 
+                  required
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                  placeholder="Nome do usuário"
+                  value={authForm.name}
+                  onChange={e => setAuthForm({...authForm, name: e.target.value})}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Email</label>
+                <input 
+                  type="email" 
+                  required
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                  placeholder="email@exemplo.com"
+                  value={authForm.email}
+                  onChange={e => setAuthForm({...authForm, email: e.target.value})}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Senha</label>
+                <input 
+                  type="password" 
+                  required
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                  placeholder="******"
+                  value={authForm.password}
+                  onChange={e => setAuthForm({...authForm, password: e.target.value})}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Confirmar Senha</label>
+                <input 
+                  type="password" 
+                  required
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                  placeholder="******"
+                  value={authForm.confirmPassword}
+                  onChange={e => setAuthForm({...authForm, confirmPassword: e.target.value})}
+                />
+              </div>
+
+              <div className="pt-4 flex gap-3">
+                <button 
+                  type="button"
+                  onClick={() => {
+                    setIsRegisteringUser(false)
+                    resetAuthForm()
+                    setAuthError('')
+                  }}
+                  className="flex-1 px-4 py-2.5 border border-slate-200 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  type="submit"
+                  disabled={authSubmitting}
+                  className="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center justify-center gap-2"
+                >
+                  {authSubmitting ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Cadastrando...
+                    </>
+                  ) : (
+                    'Criar Usuário'
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

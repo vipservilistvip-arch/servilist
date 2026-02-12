@@ -23,5 +23,15 @@ export default defineConfig(({ mode }) => {
     }
   }
 
-  return config
+  return {
+    ...config,
+    server: {
+      proxy: {
+        '/api': {
+          target: 'http://127.0.0.1:5000',
+          changeOrigin: true,
+        },
+      },
+    },
+  }
 })

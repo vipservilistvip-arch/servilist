@@ -9,16 +9,11 @@ lerna-debug.log*
 
 node_modules
 # dist (removido para deploy no PythonAnywhere)
+# dist
 dist-ssr
 *.local
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+# Python
+__pycache__/
+*.pyc
+servlist.db
