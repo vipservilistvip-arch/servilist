@@ -12,7 +12,14 @@ from werkzeug.security import check_password_hash, generate_password_hash
 # Obter o caminho absoluto da pasta do projeto
 basedir = os.path.abspath(os.path.dirname(__file__))
 dist_folder = os.path.join(basedir, 'dist')
-db_path = Path(basedir) / 'servlist.db'
+
+# Configuração de persistência do banco de dados
+if os.environ.get('PYTHONANYWHERE_DOMAIN'):
+    # No PythonAnywhere, salva fora da pasta do projeto para evitar sobrescrita pelo Git
+    db_path = Path('/home/servilistvip2026/servlist.db')
+else:
+    # Localmente, mantém na pasta do projeto
+    db_path = Path(basedir) / 'servlist.db'
 
 app = Flask(__name__, static_folder=dist_folder)
 
