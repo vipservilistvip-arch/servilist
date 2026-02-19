@@ -80,6 +80,26 @@ def init_db() -> None:
             )
             '''
         )
+        conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS contract_points (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                equipment_user TEXT NOT NULL,
+                equipment_password TEXT NOT NULL,
+                provider_name TEXT NOT NULL,
+                provider_contact TEXT NOT NULL,
+                provider_holder TEXT NOT NULL,
+                provider_cpf_cnpj TEXT NOT NULL,
+                provider_city TEXT NOT NULL,
+                notes TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            )
+            '''
+        )
         conn.commit()
 
 
@@ -425,6 +445,203 @@ def delete_server(server_id: str):
 
     if cursor.rowcount == 0:
         return jsonify({'error': 'Servidor nao encontrado.'}), 404
+
+    return jsonify({'ok': True})
+
+
+def contract_point_row_to_payload(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        'id': row['id'],
+        'name': row['name'],
+        'equipmentUser': row['equipment_user'],
+        'equipmentPassword': row['equipment_password'],
+        'providerName': row['provider_name'],
+        'providerContact': row['provider_contact'],
+        'providerHolder': row['provider_holder'],
+        'providerCpfCnpj': row['provider_cpf_cnpj'],
+        'providerCity': row['provider_city'],
+        'notes': row['notes'],
+    }
+
+
+def validate_contract_point_payload(payload: dict[str, Any]) -> tuple[dict[str, str], str | None]:
+    normalized = {
+        'id': str(payload.get('id', '')).strip(),
+        'name': str(payload.get('name', '')).strip(),
+        'equipmentUser': str(payload.get('equipmentUser', '')).strip(),
+        'equipmentPassword': str(payload.get('equipmentPassword', '')).strip(),
+        'providerName': str(payload.get('providerName', '')).strip(),
+        'providerContact': str(payload.get('providerContact', '')).strip(),
+        'providerHolder': str(payload.get('providerHolder', '')).strip(),
+        'providerCpfCnpj': str(payload.get('providerCpfCnpj', '')).strip(),
+        'providerCity': str(payload.get('providerCity', '')).strip(),
+        'notes': str(payload.get('notes', '')).strip(),
+    }
+
+    if not normalized['id']:
+        return {}, 'ID do ponto de contratacao e obrigatorio.'
+    if not normalized['name']:
+        return {}, 'Nome do ponto de contratacao e obrigatorio.'
+
+    return normalized, None
+
+
+@app.get('/api/contract-points')
+def list_contract_points():
+    user, auth_error = require_auth()
+    if auth_error:
+        return auth_error
+
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            '''
+            SELECT * FROM contract_points
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            ''',
+            (user['id'],),
+        ).fetchall()
+
+    return jsonify({'contractPoints': [contract_point_row_to_payload(row) for row in rows]})
+
+
+@app.post('/api/contract-points')
+def create_contract_point():
+    user, auth_error = require_auth()
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True) or {}
+    normalized, error = validate_contract_point_payload(payload)
+    if error:
+        return jsonify({'error': error}), 400
+
+    now = datetime.utcnow().isoformat()
+    with get_db_connection() as conn:
+        existing = conn.execute(
+            'SELECT id FROM contract_points WHERE id = ? AND user_id = ?',
+            (normalized['id'], user['id']),
+        ).fetchone()
+        if existing:
+            return jsonify({'error': 'ID de ponto de contratacao ja cadastrado.'}), 409
+
+        conn.execute(
+            '''
+            INSERT INTO contract_points (
+                id, user_id, name, equipment_user, equipment_password,
+                provider_name, provider_contact, provider_holder,
+                provider_cpf_cnpj, provider_city, notes, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (
+                normalized['id'],
+                user['id'],
+                normalized['name'],
+                normalized['equipmentUser'],
+                normalized['equipmentPassword'],
+                normalized['providerName'],
+                normalized['providerContact'],
+                normalized['providerHolder'],
+                normalized['providerCpfCnpj'],
+                normalized['providerCity'],
+                normalized['notes'],
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            'SELECT * FROM contract_points WHERE id = ? AND user_id = ?',
+            (normalized['id'], user['id']),
+        ).fetchone()
+
+    if not row:
+        return jsonify({'error': 'Falha ao criar ponto de contratacao.'}), 500
+
+    return jsonify({'contractPoint': contract_point_row_to_payload(row)}), 201
+
+
+@app.put('/api/contract-points/<point_id>')
+def update_contract_point(point_id: str):
+    user, auth_error = require_auth()
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True) or {}
+    payload['id'] = point_id
+    normalized, error = validate_contract_point_payload(payload)
+    if error:
+        return jsonify({'error': error}), 400
+
+    with get_db_connection() as conn:
+        existing = conn.execute(
+            'SELECT id FROM contract_points WHERE id = ? AND user_id = ?',
+            (point_id, user['id']),
+        ).fetchone()
+        if not existing:
+            return jsonify({'error': 'Ponto de contratacao nao encontrado.'}), 404
+
+        conn.execute(
+            '''
+            UPDATE contract_points
+            SET
+                name = ?,
+                equipment_user = ?,
+                equipment_password = ?,
+                provider_name = ?,
+                provider_contact = ?,
+                provider_holder = ?,
+                provider_cpf_cnpj = ?,
+                provider_city = ?,
+                notes = ?,
+                updated_at = ?
+            WHERE id = ? AND user_id = ?
+            ''',
+            (
+                normalized['name'],
+                normalized['equipmentUser'],
+                normalized['equipmentPassword'],
+                normalized['providerName'],
+                normalized['providerContact'],
+                normalized['providerHolder'],
+                normalized['providerCpfCnpj'],
+                normalized['providerCity'],
+                normalized['notes'],
+                datetime.utcnow().isoformat(),
+                point_id,
+                user['id'],
+            ),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            'SELECT * FROM contract_points WHERE id = ? AND user_id = ?',
+            (point_id, user['id']),
+        ).fetchone()
+
+    if not row:
+        return jsonify({'error': 'Falha ao atualizar ponto de contratacao.'}), 500
+
+    return jsonify({'contractPoint': contract_point_row_to_payload(row)})
+
+
+@app.delete('/api/contract-points/<point_id>')
+def delete_contract_point(point_id: str):
+    user, auth_error = require_auth()
+    if auth_error:
+        return auth_error
+
+    with get_db_connection() as conn:
+        cursor = conn.execute(
+            'DELETE FROM contract_points WHERE id = ? AND user_id = ?',
+            (point_id, user['id']),
+        )
+        conn.commit()
+
+    if cursor.rowcount == 0:
+        return jsonify({'error': 'Ponto de contratacao nao encontrado.'}), 404
 
     return jsonify({'ok': True})
 

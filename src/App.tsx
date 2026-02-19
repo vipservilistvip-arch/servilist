@@ -14,7 +14,8 @@ import {
   Edit2,
   Wifi,
   WifiOff,
-  UserPlus
+  UserPlus,
+  FileText
 } from 'lucide-react'
 
 interface ServerData {
@@ -32,6 +33,19 @@ interface ServerData {
   status: 'online' | 'offline' | 'maintenance'
   backupStatus: 'success' | 'failed' | 'pending'
   lastBackup: string
+  notes: string
+}
+
+interface ContractPoint {
+  id: string
+  name: string
+  equipmentUser: string
+  equipmentPassword: string
+  providerName: string
+  providerContact: string
+  providerHolder: string
+  providerCpfCnpj: string
+  providerCity: string
   notes: string
 }
 
@@ -187,6 +201,15 @@ function App() {
     confirmPassword: '',
   })
 
+  const [activeTab, setActiveTab] = useState<'servers' | 'contracts'>('servers')
+  const [contractPoints, setContractPoints] = useState<ContractPoint[]>([])
+  const [isAddingContract, setIsAddingContract] = useState(false)
+  const [isEditingContract, setIsEditingContract] = useState(false)
+  const [newContract, setNewContract] = useState<Partial<ContractPoint>>({})
+  const [editingContract, setEditingContract] = useState<ContractPoint | null>(null)
+  const [contractsLoading, setContractsLoading] = useState(false)
+  const [contractsError, setContractsError] = useState('')
+
   const authCardTitle = authMode === 'login' ? 'Entrar no ServList' : 'Criar conta'
 
   const apiFetch = async <T,>(path: string, options: RequestInit = {}): Promise<T> => {
@@ -247,13 +270,29 @@ function App() {
     }
   }
 
+  const loadContractPoints = async () => {
+    setContractsLoading(true)
+    setContractsError('')
+    try {
+      const data = await apiFetch<{ contractPoints: ContractPoint[] }>('/api/contract-points', { method: 'GET' })
+      setContractPoints(data.contractPoints)
+    } catch (error) {
+      setContractsError(error instanceof Error ? error.message : 'Falha ao carregar pontos de contratação.')
+      setContractPoints([])
+    } finally {
+      setContractsLoading(false)
+    }
+  }
+
   useEffect(() => {
     if (!authUser) {
       setServers([])
+      setContractPoints([])
       setPingStatus({})
       return
     }
     loadServers()
+    loadContractPoints()
   }, [authUser])
 
   // Auto ping functionality every minute
@@ -593,6 +632,57 @@ function App() {
     }
   }
 
+  const handleAddContract = async () => {
+    if (newContract.name) {
+      const contract: Partial<ContractPoint> = {
+        ...newContract,
+        id: crypto.randomUUID()
+      }
+
+      try {
+        const data = await apiFetch<{ contractPoint: ContractPoint }>('/api/contract-points', {
+          method: 'POST',
+          body: JSON.stringify(contract)
+        })
+
+        setContractPoints([data.contractPoint, ...contractPoints])
+        setNewContract({})
+        setIsAddingContract(false)
+      } catch (error) {
+        alert(error instanceof Error ? error.message : 'Falha ao criar ponto de contratação.')
+      }
+    }
+  }
+
+  const handleUpdateContract = async () => {
+    if (editingContract && newContract.name) {
+      try {
+        const data = await apiFetch<{ contractPoint: ContractPoint }>(`/api/contract-points/${editingContract.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(newContract)
+        })
+
+        setContractPoints(contractPoints.map(c => (c.id === editingContract.id ? data.contractPoint : c)))
+        setEditingContract(null)
+        setNewContract({})
+        setIsEditingContract(false)
+      } catch (error) {
+        alert(error instanceof Error ? error.message : 'Falha ao atualizar ponto de contratação.')
+      }
+    }
+  }
+
+  const handleDeleteContract = async (id: string) => {
+    if (confirm('Tem certeza que deseja excluir este ponto de contratação?')) {
+      try {
+        await apiFetch<{ ok: boolean }>(`/api/contract-points/${id}`, { method: 'DELETE' })
+        setContractPoints(contractPoints.filter(c => c.id !== id))
+      } catch (error) {
+        alert(error instanceof Error ? error.message : 'Falha ao excluir ponto de contratação.')
+      }
+    }
+  }
+
   const handleLogout = async () => {
     try {
       await apiFetch('/api/auth/logout', { method: 'POST' })
@@ -761,13 +851,23 @@ function App() {
               <UserPlus className="w-4 h-4" />
               Novo Usuário
             </button>
-            <button 
-              onClick={() => setIsAddingServer(true)}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm"
-            >
-              <Plus className="w-4 h-4" />
-              Novo Servidor
-            </button>
+            {activeTab === 'servers' ? (
+              <button 
+                onClick={() => setIsAddingServer(true)}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm"
+              >
+                <Plus className="w-4 h-4" />
+                Novo Servidor
+              </button>
+            ) : (
+              <button 
+                onClick={() => setIsAddingContract(true)}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm"
+              >
+                <Plus className="w-4 h-4" />
+                Novo Ponto
+              </button>
+            )}
             <button 
               onClick={handleLogout}
               className="bg-slate-700 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
@@ -776,285 +876,426 @@ function App() {
             </button>
           </div>
         </div>
+        <div className="border-t border-slate-200 bg-slate-50">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex gap-8">
+              <button
+                onClick={() => setActiveTab('servers')}
+                className={`py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
+                  activeTab === 'servers'
+                    ? 'border-blue-600 text-blue-600'
+                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                }`}
+              >
+                <Server className="w-4 h-4" />
+                Servidores
+              </button>
+              <button
+                onClick={() => setActiveTab('contracts')}
+                className={`py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
+                  activeTab === 'contracts'
+                    ? 'border-blue-600 text-blue-600'
+                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                }`}
+              >
+                <FileText className="w-4 h-4" />
+                Pontos de Contratação
+              </button>
+            </div>
+          </div>
+        </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {serversLoading && (
-          <div className="flex justify-center mb-6">
-            <Clock className="w-8 h-8 text-blue-500 animate-spin" />
-          </div>
-        )}
-        {serversError && (
-          <div className="mb-6 p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl flex items-center gap-3">
-            <ShieldAlert className="w-5 h-5" />
-            <p className="text-sm font-medium">{serversError}</p>
-          </div>
-        )}
-        {/* Stats Summary */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-slate-500 text-sm font-medium">Total de Servidores</span>
-              <Database className="text-blue-500 w-5 h-5" />
+        {activeTab === 'servers' ? (
+          <>
+            {serversLoading && (
+              <div className="flex justify-center mb-6">
+                <Clock className="w-8 h-8 text-blue-500 animate-spin" />
+              </div>
+            )}
+            {serversError && (
+              <div className="mb-6 p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl flex items-center gap-3">
+                <ShieldAlert className="w-5 h-5" />
+                <p className="text-sm font-medium">{serversError}</p>
+              </div>
+            )}
+            {/* Stats Summary */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-slate-500 text-sm font-medium">Total de Servidores</span>
+                  <Database className="text-blue-500 w-5 h-5" />
+                </div>
+                <p className="text-2xl font-bold">{servers.length}</p>
+              </div>
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-slate-500 text-sm font-medium">Online</span>
+                  <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse"></div>
+                </div>
+                <p className="text-2xl font-bold">{servers.filter(s => s.status === 'online').length}</p>
+              </div>
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-slate-500 text-sm font-medium">Backups em Dia</span>
+                  <ShieldCheck className="text-emerald-500 w-5 h-5" />
+                </div>
+                <p className="text-2xl font-bold">{servers.filter(s => s.backupStatus === 'success').length}</p>
+              </div>
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-slate-500 text-sm font-medium">Falhas de Backup</span>
+                  <ShieldAlert className="text-rose-500 w-5 h-5" />
+                </div>
+                <p className="text-2xl font-bold text-rose-600">{servers.filter(s => s.backupStatus === 'failed').length}</p>
+              </div>
             </div>
-            <p className="text-2xl font-bold">{servers.length}</p>
-          </div>
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-slate-500 text-sm font-medium">Online</span>
-              <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse"></div>
-            </div>
-            <p className="text-2xl font-bold">{servers.filter(s => s.status === 'online').length}</p>
-          </div>
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-slate-500 text-sm font-medium">Backups em Dia</span>
-              <ShieldCheck className="text-emerald-500 w-5 h-5" />
-            </div>
-            <p className="text-2xl font-bold">{servers.filter(s => s.backupStatus === 'success').length}</p>
-          </div>
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-slate-500 text-sm font-medium">Falhas de Backup</span>
-              <ShieldAlert className="text-rose-500 w-5 h-5" />
-            </div>
-            <p className="text-2xl font-bold text-rose-600">{servers.filter(s => s.backupStatus === 'failed').length}</p>
-          </div>
-        </div>
 
-        {/* Ping Dashboard */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-slate-900">Dashboard de Ping (ms)</h2>
-            <span className="text-xs text-slate-500">
-              {pingDashboardEntries.length > 0 ? `${pingDashboardEntries.length} servidor(es) medidos` : 'Sem mediÃ§Ãµes ainda'}
-            </span>
-          </div>
+            {/* Ping Dashboard */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 mb-8">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-slate-900">Dashboard de Ping (ms)</h2>
+                <span className="text-xs text-slate-500">
+                  {pingDashboardEntries.length > 0 ? `${pingDashboardEntries.length} servidor(es) medidos` : 'Sem mediÃ§Ãµes ainda'}
+                </span>
+              </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs text-slate-500">MÃ©dia</p>
-              <p className="text-xl font-semibold">{averageLatency}ms</p>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs text-slate-500">Menor Ping</p>
-              <p className="text-xl font-semibold">{minLatency}ms</p>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs text-slate-500">Maior Ping</p>
-              <p className="text-xl font-semibold">{maxLatency}ms</p>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs text-slate-500">LatÃªncia Alta (&ge;150ms)</p>
-              <p className="text-xl font-semibold">{criticalLatencyCount}</p>
-            </div>
-          </div>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs text-slate-500">MÃ©dia</p>
+                  <p className="text-xl font-semibold">{averageLatency}ms</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs text-slate-500">Menor Ping</p>
+                  <p className="text-xl font-semibold">{minLatency}ms</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs text-slate-500">Maior Ping</p>
+                  <p className="text-xl font-semibold">{maxLatency}ms</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs text-slate-500">LatÃªncia Alta (&ge;150ms)</p>
+                  <p className="text-xl font-semibold">{criticalLatencyCount}</p>
+                </div>
+              </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200">
-                  <th className="px-3 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">Servidor</th>
-                  <th className="px-3 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">Endpoint</th>
-                  <th className="px-3 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">Ping</th>
-                  <th className="px-3 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">Atualizado em</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {pingDashboardEntries.length > 0 ? (
-                  pingDashboardEntries.map((entry) => (
-                    <tr key={entry.serverId} className="hover:bg-slate-50">
-                      <td className="px-3 py-2">
-                        <p className="text-sm font-medium text-slate-800">{entry.name}</p>
-                        <p className="text-xs text-slate-500">{entry.client}</p>
-                      </td>
-                      <td className="px-3 py-2 text-xs font-mono text-slate-600">{entry.endpoint}</td>
-                      <td className="px-3 py-2">
-                        {entry.ping.isOnline ? (
-                          <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${getLatencyBadgeClass(entry.ping.latency)}`}>
-                            {entry.ping.latency}ms
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium bg-slate-200 text-slate-700">
-                            Offline
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-xs text-slate-500">
-                        {new Date(entry.ping.lastCheck).toLocaleTimeString()}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200">
+                      <th className="px-3 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">Servidor</th>
+                      <th className="px-3 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">Endpoint</th>
+                      <th className="px-3 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">Ping</th>
+                      <th className="px-3 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">Atualizado em</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {pingDashboardEntries.length > 0 ? (
+                      pingDashboardEntries.map((entry) => (
+                        <tr key={entry.serverId} className="hover:bg-slate-50">
+                          <td className="px-3 py-2">
+                            <p className="text-sm font-medium text-slate-800">{entry.name}</p>
+                            <p className="text-xs text-slate-500">{entry.client}</p>
+                          </td>
+                          <td className="px-3 py-2 text-xs font-mono text-slate-600">{entry.endpoint}</td>
+                          <td className="px-3 py-2">
+                            {entry.ping.isOnline ? (
+                              <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${getLatencyBadgeClass(entry.ping.latency)}`}>
+                                {entry.ping.latency}ms
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium bg-slate-200 text-slate-700">
+                                Offline
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-slate-500">
+                            {new Date(entry.ping.lastCheck).toLocaleTimeString()}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={4} className="px-3 py-6 text-center text-sm text-slate-500">
+                          Clique em "Verificar ConexÃ£o" para gerar o dashboard de ping em ms.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Server List */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200">
+                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Servidor / Cliente</th>
+                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Endereço IP</th>
+                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</th>
+                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Backup</th>
+                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Hardware / OS</th>
+                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-right">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {filteredServers.length > 0 ? (
+                    filteredServers.map((server) => (
+                      <tr key={server.id} className="hover:bg-slate-50 transition-colors group">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className={`p-2 rounded-lg ${server.status === 'online' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
+                              <Server className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <p className="font-semibold text-slate-900">{server.name}</p>
+                              <div className="flex items-center gap-1 text-slate-500 text-xs">
+                                <User className="w-3 h-3" />
+                                {server.client}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-1.5 text-sm font-mono text-slate-600">
+                              <Globe className="w-3.5 h-3.5" />
+                              {server.ip}:{server.port}
+                            </div>
+                            <p className="text-[10px] text-slate-500">
+                              Endpoint: <span className="font-mono">{server.endpoint || 'N/A'}</span>
+                            </p>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="space-y-1">
+                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+                              server.status === 'online' ? 'bg-emerald-100 text-emerald-700' : 
+                              server.status === 'maintenance' ? 'bg-amber-100 text-amber-700' : 
+                              'bg-rose-100 text-rose-700'
+                            }`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${
+                                server.status === 'online' ? 'bg-emerald-500' : 
+                                server.status === 'maintenance' ? 'bg-amber-500' : 
+                                'bg-rose-500'
+                              }`}></span>
+                              {server.status.toUpperCase()}
+                            </span>
+                            {pingStatus[server.id] !== undefined && (
+                              <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+                                pingStatus[server.id].isOnline ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'
+                              }`}>
+                                {pingStatus[server.id].isOnline ? (
+                                  <Wifi className="w-3 h-3" />
+                                ) : (
+                                  <WifiOff className="w-3 h-3" />
+                                )}
+                                {pingStatus[server.id].isOnline ? 'Conectado' : 'Desconectado'}
+                              </span>
+                            )}
+                            {pingStatus[server.id]?.latency > 0 && (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                                <Clock className="w-3 h-3" />
+                                {pingStatus[server.id].latency}ms
+                              </span>
+                            )}
+                            {pingStatus[server.id]?.downtimeStart && (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                                <Clock className="w-3 h-3" />
+                                {calculateDowntime(pingStatus[server.id].downtimeStart!)}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div>
+                            <div className={`flex items-center gap-1.5 text-xs font-medium mb-1 ${
+                              server.backupStatus === 'success' ? 'text-emerald-600' : 
+                              server.backupStatus === 'failed' ? 'text-rose-600' : 
+                              'text-slate-500'
+                            }`}>
+                              {server.backupStatus === 'success' ? <ShieldCheck className="w-3.5 h-3.5" /> : 
+                               server.backupStatus === 'failed' ? <ShieldAlert className="w-3.5 h-3.5" /> : 
+                               <Clock className="w-3.5 h-3.5" />}
+                              {server.backupStatus === 'success' ? 'Sucesso' : 
+                               server.backupStatus === 'failed' ? 'Falha' : 
+                               'Pendente'}
+                            </div>
+                            <p className="text-[10px] text-slate-400 font-mono">{server.lastBackup}</p>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="max-w-xs">
+                            <div className="flex items-center gap-1.5 text-xs text-slate-600 mb-1">
+                              <HardDrive className="w-3 h-3" />
+                              {server.os}
+                            </div>
+                            <p className="text-[10px] text-slate-400 truncate max-w-[150px]">{server.hardware}</p>
+                            {server.referencePoint && (
+                              <p className="text-[10px] text-slate-500 mt-1 truncate max-w-[150px]" title={server.referencePoint}>
+                                Ref: {server.referencePoint}
+                              </p>
+                            )}
+                            {server.mikrotikUser && (
+                              <p className="text-[10px] text-slate-500 mt-1 truncate max-w-[150px]" title={server.mikrotikUser}>
+                                MikroTik: {server.mikrotikUser}
+                              </p>
+                            )}
+                            {server.mikrotikPassword && (
+                              <p className="text-[10px] text-slate-500 truncate max-w-[150px]">
+                                Senha: {'*'.repeat(server.mikrotikPassword.length)}
+                              </p>
+                            )}
+                            {server.notes && (
+                              <p className="text-[10px] text-blue-500 italic mt-1 truncate max-w-[150px]" title={server.notes}>
+                                Note: {server.notes}
+                              </p>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button 
+                              onClick={() => startEditServer(server)}
+                              className="p-1.5 hover:bg-slate-200 rounded text-slate-500 transition-colors"
+                              aria-label="Editar servidor"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                            <button 
+                              onClick={() => deleteServer(server.id)}
+                              className="p-1.5 hover:bg-rose-100 rounded text-rose-500 transition-colors"
+                              aria-label="Excluir servidor"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
+                        Nenhum servidor encontrado.
                       </td>
                     </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={4} className="px-3 py-6 text-center text-sm text-slate-500">
-                      Clique em "Verificar ConexÃ£o" para gerar o dashboard de ping em ms.
-                    </td>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : (
+          <>
+            {contractsLoading && (
+              <div className="flex justify-center mb-6">
+                <Clock className="w-8 h-8 text-blue-500 animate-spin" />
+              </div>
+            )}
+            {contractsError && (
+              <div className="mb-6 p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl flex items-center gap-3">
+                <ShieldAlert className="w-5 h-5" />
+                <p className="text-sm font-medium">{contractsError}</p>
+              </div>
+            )}
+            
+            {/* Contracts List */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200">
+                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Ponto / Fornecedor</th>
+                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Acesso Equipamento</th>
+                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Detalhes do Titular</th>
+                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Localização</th>
+                    <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-right">Ações</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Server List */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-200">
-                <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Servidor / Cliente</th>
-                <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Endereço IP</th>
-                <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</th>
-                <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Backup</th>
-                <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Hardware / OS</th>
-                <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider text-right">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200">
-              {filteredServers.length > 0 ? (
-                filteredServers.map((server) => (
-                  <tr key={server.id} className="hover:bg-slate-50 transition-colors group">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className={`p-2 rounded-lg ${server.status === 'online' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
-                          <Server className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <p className="font-semibold text-slate-900">{server.name}</p>
-                          <div className="flex items-center gap-1 text-slate-500 text-xs">
-                            <User className="w-3 h-3" />
-                            {server.client}
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {contractPoints.length > 0 ? (
+                    contractPoints.map((contract) => (
+                      <tr key={contract.id} className="hover:bg-slate-50 transition-colors group">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 rounded-lg bg-blue-50 text-blue-600">
+                              <FileText className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <p className="font-semibold text-slate-900">{contract.name}</p>
+                              <div className="flex items-center gap-1 text-slate-500 text-xs">
+                                <User className="w-3 h-3" />
+                                {contract.providerName}
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-1.5 text-sm font-mono text-slate-600">
-                          <Globe className="w-3.5 h-3.5" />
-                          {server.ip}:{server.port}
-                        </div>
-                        <p className="text-[10px] text-slate-500">
-                          Endpoint: <span className="font-mono">{server.endpoint || 'N/A'}</span>
-                        </p>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="space-y-1">
-                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
-                          server.status === 'online' ? 'bg-emerald-100 text-emerald-700' : 
-                          server.status === 'maintenance' ? 'bg-amber-100 text-amber-700' : 
-                          'bg-rose-100 text-rose-700'
-                        }`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${
-                            server.status === 'online' ? 'bg-emerald-500' : 
-                            server.status === 'maintenance' ? 'bg-amber-500' : 
-                            'bg-rose-500'
-                          }`}></span>
-                          {server.status.toUpperCase()}
-                        </span>
-                        {pingStatus[server.id] !== undefined && (
-                          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
-                            pingStatus[server.id].isOnline ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'
-                          }`}>
-                            {pingStatus[server.id].isOnline ? (
-                              <Wifi className="w-3 h-3" />
-                            ) : (
-                              <WifiOff className="w-3 h-3" />
-                            )}
-                            {pingStatus[server.id].isOnline ? 'Conectado' : 'Desconectado'}
-                          </span>
-                        )}
-                        {pingStatus[server.id]?.latency > 0 && (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
-                            <Clock className="w-3 h-3" />
-                            {pingStatus[server.id].latency}ms
-                          </span>
-                        )}
-                        {pingStatus[server.id]?.downtimeStart && (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700">
-                            <Clock className="w-3 h-3" />
-                            {calculateDowntime(pingStatus[server.id].downtimeStart!)}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div>
-                        <div className={`flex items-center gap-1.5 text-xs font-medium mb-1 ${
-                          server.backupStatus === 'success' ? 'text-emerald-600' : 
-                          server.backupStatus === 'failed' ? 'text-rose-600' : 
-                          'text-slate-500'
-                        }`}>
-                          {server.backupStatus === 'success' ? <ShieldCheck className="w-3.5 h-3.5" /> : 
-                           server.backupStatus === 'failed' ? <ShieldAlert className="w-3.5 h-3.5" /> : 
-                           <Clock className="w-3.5 h-3.5" />}
-                          {server.backupStatus === 'success' ? 'Sucesso' : 
-                           server.backupStatus === 'failed' ? 'Falha' : 
-                           'Pendente'}
-                        </div>
-                        <p className="text-[10px] text-slate-400 font-mono">{server.lastBackup}</p>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="max-w-xs">
-                        <div className="flex items-center gap-1.5 text-xs text-slate-600 mb-1">
-                          <HardDrive className="w-3 h-3" />
-                          {server.os}
-                        </div>
-                        <p className="text-[10px] text-slate-400 truncate max-w-[150px]">{server.hardware}</p>
-                        {server.referencePoint && (
-                          <p className="text-[10px] text-slate-500 mt-1 truncate max-w-[150px]" title={server.referencePoint}>
-                            Ref: {server.referencePoint}
-                          </p>
-                        )}
-                        {server.mikrotikUser && (
-                          <p className="text-[10px] text-slate-500 mt-1 truncate max-w-[150px]" title={server.mikrotikUser}>
-                            MikroTik: {server.mikrotikUser}
-                          </p>
-                        )}
-                        {server.mikrotikPassword && (
-                          <p className="text-[10px] text-slate-500 truncate max-w-[150px]">
-                            Senha: {'*'.repeat(server.mikrotikPassword.length)}
-                          </p>
-                        )}
-                        {server.notes && (
-                          <p className="text-[10px] text-blue-500 italic mt-1 truncate max-w-[150px]" title={server.notes}>
-                            Note: {server.notes}
-                          </p>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button 
-                          onClick={() => startEditServer(server)}
-                          className="p-1.5 hover:bg-slate-200 rounded text-slate-500 transition-colors"
-                          aria-label="Editar servidor"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button 
-                          onClick={() => deleteServer(server.id)}
-                          className="p-1.5 hover:bg-rose-100 rounded text-rose-500 transition-colors"
-                          aria-label="Excluir servidor"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
-                    Nenhum servidor encontrado.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="space-y-1">
+                             <div className="flex items-center gap-1.5 text-xs text-slate-600">
+                                <User className="w-3 h-3" />
+                                User: {contract.equipmentUser}
+                             </div>
+                             <div className="flex items-center gap-1.5 text-xs text-slate-600">
+                                <ShieldCheck className="w-3 h-3" />
+                                Pass: {'*'.repeat(contract.equipmentPassword?.length || 0)}
+                             </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="space-y-1">
+                            <p className="text-sm font-medium text-slate-700">{contract.providerHolder}</p>
+                            <p className="text-xs text-slate-500">CPF/CNPJ: {contract.providerCpfCnpj}</p>
+                            <p className="text-xs text-slate-500">Tel: {contract.providerContact}</p>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-1.5 text-sm text-slate-600">
+                            <Globe className="w-3.5 h-3.5" />
+                            {contract.providerCity}
+                          </div>
+                          {contract.notes && (
+                            <p className="text-[10px] text-blue-500 italic mt-1 truncate max-w-[150px]" title={contract.notes}>
+                              Obs: {contract.notes}
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button 
+                              onClick={() => {
+                                setEditingContract(contract)
+                                setNewContract(contract)
+                                setIsEditingContract(true)
+                              }}
+                              className="p-1.5 hover:bg-slate-200 rounded text-slate-500 transition-colors"
+                              aria-label="Editar contrato"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                            <button 
+                              onClick={() => handleDeleteContract(contract.id)}
+                              className="p-1.5 hover:bg-rose-100 rounded text-rose-500 transition-colors"
+                              aria-label="Excluir contrato"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
+                        Nenhum ponto de contratação encontrado.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </main>
 
       {/* Add/Edit Server Modal */}
@@ -1253,7 +1494,153 @@ function App() {
         </div>
       )}
 
-      {/* Internal User Registration Modal */}
+      {/* Add/Edit Contract Point Modal */}
+      {(isAddingContract || isEditingContract) && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <h2 className="text-lg font-bold">{isAddingContract ? 'Novo Ponto de Contratação' : 'Editar Ponto de Contratação'}</h2>
+              <button 
+                onClick={() => {
+                  setIsAddingContract(false)
+                  setIsEditingContract(false)
+                  setEditingContract(null)
+                  setNewContract({})
+                }}
+                className="text-slate-400 hover:text-slate-600 transition-colors"
+                aria-label="Fechar modal"
+              >
+                <Plus className="w-6 h-6 rotate-45" />
+              </button>
+            </div>
+            
+            <div className="p-4 sm:p-5 space-y-3 overflow-y-auto max-h-[calc(90vh-72px)]">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Nome do Ponto</label>
+                <input 
+                  type="text" 
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  placeholder="Ex: Ponto Principal"
+                  value={newContract.name || ''}
+                  onChange={e => setNewContract({...newContract, name: e.target.value})}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Usuário Equipamento</label>
+                  <input 
+                    type="text" 
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder="admin"
+                    value={newContract.equipmentUser || ''}
+                    onChange={e => setNewContract({...newContract, equipmentUser: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Senha Equipamento</label>
+                  <input 
+                    type="text" 
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder="******"
+                    value={newContract.equipmentPassword || ''}
+                    onChange={e => setNewContract({...newContract, equipmentPassword: e.target.value})}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Nome do Fornecedor</label>
+                <input 
+                  type="text" 
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  placeholder="Ex: Provedor X"
+                  value={newContract.providerName || ''}
+                  onChange={e => setNewContract({...newContract, providerName: e.target.value})}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Titular do Cadastro</label>
+                  <input 
+                    type="text" 
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder="Nome do Titular"
+                    value={newContract.providerHolder || ''}
+                    onChange={e => setNewContract({...newContract, providerHolder: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">CPF / CNPJ</label>
+                  <input 
+                    type="text" 
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder="000.000.000-00"
+                    value={newContract.providerCpfCnpj || ''}
+                    onChange={e => setNewContract({...newContract, providerCpfCnpj: e.target.value})}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Telefone</label>
+                  <input 
+                    type="text" 
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder="(00) 00000-0000"
+                    value={newContract.providerContact || ''}
+                    onChange={e => setNewContract({...newContract, providerContact: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Cidade</label>
+                  <input 
+                    type="text" 
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    placeholder="Cidade - UF"
+                    value={newContract.providerCity || ''}
+                    onChange={e => setNewContract({...newContract, providerCity: e.target.value})}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Notas / Observações</label>
+                <textarea 
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none min-h-[80px] resize-none"
+                  placeholder="Informações adicionais..."
+                  value={newContract.notes || ''}
+                  onChange={e => setNewContract({...newContract, notes: e.target.value})}
+                />
+              </div>
+
+              <div className="sticky bottom-0 bg-white pt-3 flex gap-3">
+                <button 
+                  onClick={() => {
+                    setIsAddingContract(false)
+                    setIsEditingContract(false)
+                    setEditingContract(null)
+                    setNewContract({})
+                  }}
+                  className="flex-1 px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={isAddingContract ? handleAddContract : handleUpdateContract}
+                  className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm"
+                >
+                  {isAddingContract ? 'Salvar Ponto' : 'Atualizar Ponto'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Internal User Registration Modal */ }
       {isRegisteringUser && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-200">
