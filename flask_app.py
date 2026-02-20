@@ -1,12 +1,19 @@
 import os
 import re
 import sqlite3
+import smtplib
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email.mime.text import MIMEText
+from email import encoders
 
-from flask import Flask, jsonify, request, send_from_directory, session
+from flask import Flask, jsonify, request, send_from_directory, session, send_file
 from flask_cors import CORS
+from flask_apscheduler import APScheduler
 from werkzeug.security import check_password_hash, generate_password_hash
 
 # Obter o caminho absoluto da pasta do projeto
@@ -21,7 +28,32 @@ else:
     # Localmente, mantém na pasta do projeto
     db_path = Path(basedir) / 'servlist.db'
 
+import logging
+import traceback
+
 app = Flask(__name__, static_folder=dist_folder)
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    # Pass through HTTP errors
+    if isinstance(e,  Exception) and hasattr(e, 'code'):
+        return e
+    
+    # Log the full traceback
+    logger.error(f"Unhandled Exception: {str(e)}")
+    logger.error(traceback.format_exc())
+    
+    return jsonify({'error': 'Internal Server Error', 'details': str(e)}), 500
+
+# Scheduler configuration
+app.config['SCHEDULER_API_ENABLED'] = True
+scheduler = APScheduler()
+scheduler.init_app(app)
+scheduler.start()
 
 # Configuracao de sessao
 app.config['SECRET_KEY'] = os.getenv('SERVLIST_SECRET_KEY', 'change-this-secret-in-production')
@@ -97,6 +129,14 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            )
+            '''
+        )
+        conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             )
             '''
         )
@@ -644,6 +684,170 @@ def delete_contract_point(point_id: str):
         return jsonify({'error': 'Ponto de contratacao nao encontrado.'}), 404
 
     return jsonify({'ok': True})
+
+
+
+# --- Backup System ---
+
+def get_setting(key: str, default: str = '') -> str:
+    with get_db_connection() as conn:
+        row = conn.execute('SELECT value FROM settings WHERE key = ?', (key,)).fetchone()
+        return row['value'] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with get_db_connection() as conn:
+        conn.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, value))
+        conn.commit()
+
+
+def perform_backup_and_send_email() -> tuple[bool, str]:
+    try:
+        smtp_server = get_setting('smtp_server')
+        smtp_port = int(get_setting('smtp_port') or '587')
+        smtp_user = get_setting('smtp_user')
+        smtp_password = get_setting('smtp_password')
+        backup_email = get_setting('backup_email')
+
+        if not all([smtp_server, smtp_user, smtp_password, backup_email]):
+            return False, "Configuracoes de backup incompletas."
+
+        msg = MIMEMultipart()
+        msg['From'] = smtp_user
+        msg['To'] = backup_email
+        msg['Subject'] = f"Backup ServList - {datetime.now().strftime('%Y-%m-%d')}"
+
+        body = "Segue em anexo o backup do banco de dados do sistema ServList."
+        msg.attach(MIMEText(body, 'plain'))
+
+        with open(db_path, "rb") as attachment:
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(attachment.read())
+
+        encoders.encode_base64(part)
+        part.add_header(
+            "Content-Disposition",
+            f"attachment; filename=servlist_backup_{datetime.now().strftime('%Y%m%d')}.db",
+        )
+        msg.attach(part)
+
+        # Connect to server
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(smtp_user, smtp_password)
+        text = msg.as_string()
+        server.sendmail(smtp_user, backup_email, text)
+        server.quit()
+
+        return True, "Backup enviado com sucesso."
+    except Exception as e:
+        return False, f"Erro ao enviar backup: {str(e)}"
+
+
+@scheduler.task('cron', id='daily_backup', hour=0, minute=0)
+def scheduled_backup_job():
+    with app.app_context():
+        success, message = perform_backup_and_send_email()
+        print(f"[Backup Job] {message}")
+
+
+@app.get('/api/settings/backup')
+def get_backup_settings():
+    user, auth_error = require_auth()
+    if auth_error:
+        return auth_error
+
+    settings = {
+        'smtpServer': get_setting('smtp_server'),
+        'smtpPort': get_setting('smtp_port', '587'),
+        'smtpUser': get_setting('smtp_user'),
+        'backupEmail': get_setting('backup_email'),
+        # Never return password
+    }
+    return jsonify({'settings': settings})
+
+
+@app.post('/api/settings/backup')
+def save_backup_settings():
+    user, auth_error = require_auth()
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True) or {}
+
+    set_setting('smtp_server', str(payload.get('smtpServer', '')).strip())
+    set_setting('smtp_port', str(payload.get('smtpPort', '587')).strip())
+    set_setting('smtp_user', str(payload.get('smtpUser', '')).strip())
+    set_setting('backup_email', str(payload.get('backupEmail', '')).strip())
+
+    password = str(payload.get('smtpPassword', '')).strip()
+    if password:
+        set_setting('smtp_password', password)
+
+    return jsonify({'ok': True})
+
+
+@app.post('/api/backup/test')
+def test_backup():
+    user, auth_error = require_auth()
+    if auth_error:
+        return auth_error
+
+    success, message = perform_backup_and_send_email()
+    if not success:
+        return jsonify({'error': message}), 500
+
+    return jsonify({'ok': True, 'message': message})
+
+
+@app.route('/api/backup/download', methods=['GET'])
+def download_backup():
+    user, auth_error = require_auth()
+    if auth_error:
+        return auth_error
+
+    try:
+        if not os.path.exists(db_path):
+            return jsonify({'error': 'Database file not found'}), 404
+        
+        return send_file(
+            db_path,
+            as_attachment=True,
+            download_name=f"servlist_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db",
+            mimetype='application/x-sqlite3'
+        )
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/backup/restore', methods=['POST'])
+def restore_backup():
+    user, auth_error = require_auth()
+    if auth_error:
+        return auth_error
+
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+        
+    file = request.files['file']
+    
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+        
+    if file and file.filename.endswith('.db'):
+        try:
+            # Create a backup of the current DB just in case
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_path = f"{db_path}.bak_{timestamp}"
+            shutil.copy2(db_path, backup_path)
+            
+            # Save the new file
+            file.save(db_path)
+            
+            return jsonify({'success': True, 'message': 'Database restored successfully'})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+            
+    return jsonify({'error': 'Invalid file type. Please upload a .db file'}), 400
 
 
 # Serve React App

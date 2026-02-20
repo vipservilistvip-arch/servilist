@@ -15,7 +15,10 @@ import {
   Wifi,
   WifiOff,
   UserPlus,
-  FileText
+  FileText,
+  Settings,
+  Download,
+  Upload
 } from 'lucide-react'
 
 interface ServerData {
@@ -69,6 +72,14 @@ interface AuthUser {
   name: string
   email: string
   createdAt: string
+}
+
+interface BackupSettings {
+  smtpServer: string
+  smtpPort: string
+  smtpUser: string
+  smtpPassword?: string
+  backupEmail: string
 }
 
 type AuthMode = 'login' | 'register'
@@ -201,7 +212,14 @@ function App() {
     confirmPassword: '',
   })
 
-  const [activeTab, setActiveTab] = useState<'servers' | 'contracts'>('servers')
+  const [activeTab, setActiveTab] = useState<'servers' | 'contracts' | 'settings'>('servers')
+  const [backupSettings, setBackupSettings] = useState<BackupSettings>({
+    smtpServer: '',
+    smtpPort: '587',
+    smtpUser: '',
+    backupEmail: ''
+  })
+  const [settingsLoading, setSettingsLoading] = useState(false)
   const [contractPoints, setContractPoints] = useState<ContractPoint[]>([])
   const [isAddingContract, setIsAddingContract] = useState(false)
   const [isEditingContract, setIsEditingContract] = useState(false)
@@ -683,6 +701,124 @@ function App() {
     }
   }
 
+  const loadSettings = async () => {
+    try {
+      setSettingsLoading(true)
+      const data = await apiFetch<{ settings: BackupSettings }>('/api/settings/backup')
+      setBackupSettings(data.settings)
+    } catch (error) {
+      console.error('Failed to load settings', error)
+    } finally {
+      setSettingsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (activeTab === 'settings' && authUser) {
+      loadSettings()
+    }
+  }, [activeTab, authUser])
+
+  const handleSaveSettings = async () => {
+    try {
+      await apiFetch('/api/settings/backup', {
+        method: 'POST',
+        body: JSON.stringify(backupSettings)
+      })
+      alert('Configurações salvas com sucesso!')
+    } catch (error) {
+      alert('Erro ao salvar configurações.')
+    }
+  }
+
+  const handleTestBackup = async () => {
+    try {
+      const data = await apiFetch<{ message: string }>('/api/backup/test', { method: 'POST' })
+      alert(data.message)
+    } catch (error) {
+      alert('Erro ao testar backup: ' + (error instanceof Error ? error.message : 'Unknown error'))
+    }
+  }
+
+  const handleDownloadBackup = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/backup/download`, {
+        method: 'GET',
+        credentials: 'include',
+      })
+      
+      if (response.ok) {
+        const blob = await response.blob()
+        const url = window.URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        const contentDisposition = response.headers.get('Content-Disposition')
+        let filename = `servlist_backup_${new Date().toISOString().slice(0,10)}.db`
+        if (contentDisposition) {
+            const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/)
+            if (filenameMatch && filenameMatch.length === 2)
+                filename = filenameMatch[1]
+        }
+        
+        a.download = filename
+        document.body.appendChild(a)
+        a.click()
+        window.URL.revokeObjectURL(url)
+        a.remove()
+      } else {
+        if (response.status === 401) {
+            handleLogout()
+            return
+        }
+        alert('Erro ao baixar backup')
+      }
+    } catch (error) {
+      console.error('Error downloading backup:', error)
+      alert('Erro ao baixar backup')
+    }
+  }
+
+  const handleRestoreBackup = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    if (!confirm('ATENÇÃO: Restaurar um backup substituirá todos os dados atuais do sistema. Uma cópia de segurança dos dados atuais será criada automaticamente antes da substituição.\n\nDeseja continuar?')) {
+      event.target.value = ''
+      return
+    }
+
+    const formData = new FormData()
+    formData.append('file', file)
+
+    try {
+      setSettingsLoading(true)
+      const response = await fetch(`${API_BASE_URL}/api/backup/restore`, {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      })
+
+      const data = await response.json()
+      
+      if (response.ok) {
+        alert('Backup restaurado com sucesso! O sistema será recarregado.')
+        window.location.reload()
+      } else {
+        if (response.status === 401) {
+            handleLogout()
+            return
+        }
+        alert(`Erro ao restaurar backup: ${data.error || 'Erro desconhecido'}`)
+      }
+    } catch (error) {
+      console.error('Error restoring backup:', error)
+      alert('Erro ao restaurar backup')
+    } finally {
+      setSettingsLoading(false)
+      event.target.value = ''
+    }
+  }
+
   const handleLogout = async () => {
     try {
       await apiFetch('/api/auth/logout', { method: 'POST' })
@@ -900,6 +1036,17 @@ function App() {
               >
                 <FileText className="w-4 h-4" />
                 Pontos de Contratação
+              </button>
+              <button
+                onClick={() => setActiveTab('settings')}
+                className={`py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
+                  activeTab === 'settings'
+                    ? 'border-blue-600 text-blue-600'
+                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                }`}
+              >
+                <Settings className="w-4 h-4" />
+                Configurações
               </button>
             </div>
           </div>
@@ -1185,8 +1332,8 @@ function App() {
                 </tbody>
               </table>
             </div>
-          </>
-        ) : (
+        </>
+      ) : activeTab === 'contracts' ? (
           <>
             {contractsLoading && (
               <div className="flex justify-center mb-6">
@@ -1295,6 +1442,137 @@ function App() {
               </table>
             </div>
           </>
+        ) : (
+          <div className="space-y-6">
+            <div className="max-w-2xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-6 border-b border-slate-100">
+              <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <Settings className="w-5 h-5 text-blue-600" />
+                Configurações de Backup Email
+              </h2>
+              <p className="text-sm text-slate-500 mt-1">Configure o envio automático de backups por email.</p>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Servidor SMTP</label>
+                  <input
+                    type="text"
+                    value={backupSettings.smtpServer}
+                    onChange={e => setBackupSettings({...backupSettings, smtpServer: e.target.value})}
+                    placeholder="smtp.gmail.com"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Porta SMTP</label>
+                  <input
+                    type="text"
+                    value={backupSettings.smtpPort}
+                    onChange={e => setBackupSettings({...backupSettings, smtpPort: e.target.value})}
+                    placeholder="587"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Usuário SMTP</label>
+                  <input
+                    type="text"
+                    value={backupSettings.smtpUser}
+                    onChange={e => setBackupSettings({...backupSettings, smtpUser: e.target.value})}
+                    placeholder="seu-email@gmail.com"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Senha SMTP</label>
+                  <input
+                    type="password"
+                    value={backupSettings.smtpPassword || ''}
+                    onChange={e => setBackupSettings({...backupSettings, smtpPassword: e.target.value})}
+                    placeholder="Senha de app"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+                  <p className="text-xs text-slate-500 mt-1">Deixe em branco para não alterar.</p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Email para Receber Backup</label>
+                <input
+                  type="email"
+                  value={backupSettings.backupEmail}
+                  onChange={e => setBackupSettings({...backupSettings, backupEmail: e.target.value})}
+                  placeholder="admin@empresa.com"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+              </div>
+
+              <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-100 mt-6">
+                <button
+                  onClick={handleTestBackup}
+                  className="px-4 py-2 text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg text-sm font-medium transition-colors"
+                >
+                  Testar Envio
+                </button>
+                <button
+                  onClick={handleSaveSettings}
+                  disabled={settingsLoading}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                >
+                  {settingsLoading ? 'Salvando...' : 'Salvar Configurações'}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="max-w-2xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-6 border-b border-slate-100">
+              <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <Database className="w-5 h-5 text-blue-600" />
+                Backup Local e Restauração
+              </h2>
+              <p className="text-sm text-slate-500 mt-1">Gerencie backups manuais do banco de dados.</p>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <div className="flex flex-col sm:flex-row gap-4">
+                <button
+                  onClick={handleDownloadBackup}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium transition-colors border border-slate-200"
+                >
+                  <Download className="w-5 h-5" />
+                  Baixar Backup Atual
+                </button>
+                
+                <div className="flex-1">
+                  <input
+                    type="file"
+                    id="restore-backup"
+                    accept=".db"
+                    className="hidden"
+                    onChange={handleRestoreBackup}
+                  />
+                  <label
+                    htmlFor="restore-backup"
+                    className="flex items-center justify-center gap-2 px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium transition-colors border border-slate-200 cursor-pointer w-full"
+                  >
+                    <Upload className="w-5 h-5" />
+                    Restaurar Backup
+                  </label>
+                </div>
+              </div>
+              
+              <p className="text-xs text-slate-500 text-center">
+                Nota: Ao restaurar um backup, o sistema criará automaticamente uma cópia de segurança do banco atual antes de sobrescrevê-lo.
+              </p>
+            </div>
+          </div>
+          </div>
         )}
       </main>
 
