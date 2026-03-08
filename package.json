@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:api": "python flask_app.py",
+    "dev:all": "python scripts/dev_all.py",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",

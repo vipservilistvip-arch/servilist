@@ -18,7 +18,9 @@ import {
   FileText,
   Settings,
   Download,
-  Upload
+  Upload,
+  Eye,
+  ArrowLeft
 } from 'lucide-react'
 
 interface ServerData {
@@ -83,10 +85,47 @@ interface BackupSettings {
 }
 
 type AuthMode = 'login' | 'register'
+type AppTab = 'servers' | 'contracts' | 'settings' | 'details'
+type DetailSelection =
+  | { type: 'server'; data: ServerData }
+  | { type: 'contract'; data: ContractPoint }
 
 const PING_TIMEOUT_MS = 1500
 const PING_ATTEMPTS = 3
 const API_BASE_URL = import.meta.env.VITE_API_URL || ''
+
+function getServerStatusLabel(status: ServerData['status']): string {
+  switch (status) {
+    case 'online':
+      return 'Online'
+    case 'offline':
+      return 'Offline'
+    default:
+      return 'Manutencao'
+  }
+}
+
+function getBackupStatusLabel(status: ServerData['backupStatus']): string {
+  switch (status) {
+    case 'success':
+      return 'Sucesso'
+    case 'failed':
+      return 'Falha'
+    default:
+      return 'Pendente'
+  }
+}
+
+function getDisplayValue(value?: string | null): string {
+  if (!value) return 'Nao informado'
+  const trimmedValue = value.trim()
+  return trimmedValue || 'Nao informado'
+}
+
+function maskSecret(value?: string | null): string {
+  if (!value) return 'Nao informado'
+  return '*'.repeat(value.length)
+}
 
 function normalizeProbeUrl(url: string): string {
   return url.endsWith('/') ? url.slice(0, -1) : url
@@ -212,7 +251,8 @@ function App() {
     confirmPassword: '',
   })
 
-  const [activeTab, setActiveTab] = useState<'servers' | 'contracts' | 'settings'>('servers')
+  const [activeTab, setActiveTab] = useState<AppTab>('servers')
+  const [selectedDetail, setSelectedDetail] = useState<DetailSelection | null>(null)
   const [backupSettings, setBackupSettings] = useState<BackupSettings>({
     smtpServer: '',
     smtpPort: '587',
@@ -307,6 +347,8 @@ function App() {
       setServers([])
       setContractPoints([])
       setPingStatus({})
+      setSelectedDetail(null)
+      setActiveTab('servers')
       return
     }
     loadServers()
@@ -440,6 +482,22 @@ function App() {
     setIsEditingServer(true)
   }
 
+  const openServerDetails = (server: ServerData) => {
+    setSelectedDetail({ type: 'server', data: server })
+    setActiveTab('details')
+  }
+
+  const startEditContract = (contract: ContractPoint) => {
+    setEditingContract(contract)
+    setNewContract(contract)
+    setIsEditingContract(true)
+  }
+
+  const openContractDetails = (contract: ContractPoint) => {
+    setSelectedDetail({ type: 'contract', data: contract })
+    setActiveTab('details')
+  }
+
   // Check connectivity for all servers
   const checkAllConnectivity = async () => {
     setIsPinging(true)
@@ -510,6 +568,15 @@ function App() {
     s.ip.includes(searchTerm) ||
     (s.endpoint || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
     (s.referencePoint || '').toLowerCase().includes(searchTerm.toLowerCase())
+  )
+
+  const filteredContracts = contractPoints.filter((contract) =>
+    contract.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (contract.providerName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (contract.providerHolder || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (contract.providerContact || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (contract.providerCity || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (contract.providerCpfCnpj || '').toLowerCase().includes(searchTerm.toLowerCase())
   )
 
   const pingDashboardEntries: PingDashboardEntry[] = filteredServers
@@ -718,6 +785,40 @@ function App() {
       loadSettings()
     }
   }, [activeTab, authUser])
+
+  useEffect(() => {
+    if (selectedDetail?.type !== 'server') return
+
+    const updatedServer = servers.find((server) => server.id === selectedDetail.data.id)
+    if (!updatedServer) {
+      setSelectedDetail(null)
+      if (activeTab === 'details') {
+        setActiveTab('servers')
+      }
+      return
+    }
+
+    if (updatedServer !== selectedDetail.data) {
+      setSelectedDetail({ type: 'server', data: updatedServer })
+    }
+  }, [activeTab, selectedDetail, servers])
+
+  useEffect(() => {
+    if (selectedDetail?.type !== 'contract') return
+
+    const updatedContract = contractPoints.find((contract) => contract.id === selectedDetail.data.id)
+    if (!updatedContract) {
+      setSelectedDetail(null)
+      if (activeTab === 'details') {
+        setActiveTab('contracts')
+      }
+      return
+    }
+
+    if (updatedContract !== selectedDetail.data) {
+      setSelectedDetail({ type: 'contract', data: updatedContract })
+    }
+  }, [activeTab, contractPoints, selectedDetail])
 
   const handleSaveSettings = async () => {
     try {
@@ -955,7 +1056,7 @@ function App() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
               <input 
                 type="text" 
-                placeholder="Buscar servidor, cliente ou IP..."
+                placeholder="Buscar servidor, cliente, ponto ou fornecedor..."
                 className="pl-10 pr-4 py-2 bg-slate-100 border-none rounded-full text-sm w-64 focus:ring-2 focus:ring-blue-500 transition-all"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -987,7 +1088,7 @@ function App() {
               <UserPlus className="w-4 h-4" />
               Novo Usuário
             </button>
-            {activeTab === 'servers' ? (
+            {activeTab === 'servers' && (
               <button 
                 onClick={() => setIsAddingServer(true)}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm"
@@ -995,7 +1096,8 @@ function App() {
                 <Plus className="w-4 h-4" />
                 Novo Servidor
               </button>
-            ) : (
+            )}
+            {activeTab === 'contracts' && (
               <button 
                 onClick={() => setIsAddingContract(true)}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-sm"
@@ -1303,7 +1405,15 @@ function App() {
                           </div>
                         </td>
                         <td className="px-6 py-4 text-right">
-                          <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div className="flex items-center justify-end gap-2">
+                            <button 
+                              onClick={() => openServerDetails(server)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors text-xs font-semibold"
+                              aria-label="Ver detalhes do servidor"
+                            >
+                              <Eye className="w-4 h-4" />
+                              Detalhes
+                            </button>
                             <button 
                               onClick={() => startEditServer(server)}
                               className="p-1.5 hover:bg-slate-200 rounded text-slate-500 transition-colors"
@@ -1360,8 +1470,8 @@ function App() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
-                  {contractPoints.length > 0 ? (
-                    contractPoints.map((contract) => (
+                  {filteredContracts.length > 0 ? (
+                    filteredContracts.map((contract) => (
                       <tr key={contract.id} className="hover:bg-slate-50 transition-colors group">
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-3">
@@ -1408,13 +1518,17 @@ function App() {
                           )}
                         </td>
                         <td className="px-6 py-4 text-right">
-                          <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div className="flex items-center justify-end gap-2">
                             <button 
-                              onClick={() => {
-                                setEditingContract(contract)
-                                setNewContract(contract)
-                                setIsEditingContract(true)
-                              }}
+                              onClick={() => openContractDetails(contract)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors text-xs font-semibold"
+                              aria-label="Ver detalhes do ponto"
+                            >
+                              <Eye className="w-4 h-4" />
+                              Detalhes
+                            </button>
+                            <button 
+                              onClick={() => startEditContract(contract)}
                               className="p-1.5 hover:bg-slate-200 rounded text-slate-500 transition-colors"
                               aria-label="Editar contrato"
                             >
@@ -1442,6 +1556,215 @@ function App() {
               </table>
             </div>
           </>
+        ) : activeTab === 'details' ? (
+          selectedDetail ? (
+            <div className="space-y-6">
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="space-y-2">
+                    <span className="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                      {selectedDetail.type === 'server' ? 'Servidor cadastrado' : 'Ponto cadastrado'}
+                    </span>
+                    <div>
+                      <h2 className="text-2xl font-bold text-slate-900">{selectedDetail.data.name}</h2>
+                      <p className="text-sm text-slate-500">
+                        {selectedDetail.type === 'server'
+                          ? `Cliente: ${getDisplayValue(selectedDetail.data.client)}`
+                          : `Fornecedor: ${getDisplayValue(selectedDetail.data.providerName)}`}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      onClick={() => setActiveTab(selectedDetail.type === 'server' ? 'servers' : 'contracts')}
+                      className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                    >
+                      <ArrowLeft className="w-4 h-4" />
+                      Voltar
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (selectedDetail.type === 'server') {
+                          startEditServer(selectedDetail.data)
+                          return
+                        }
+                        startEditContract(selectedDetail.data)
+                      }}
+                      className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                      Editar cadastro
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {selectedDetail.type === 'server' ? (
+                <>
+                  <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-4">
+                      <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Identificacao</h3>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">ID</p>
+                        <p className="text-sm text-slate-700 font-mono break-all">{getDisplayValue(selectedDetail.data.id)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Nome do Servidor</p>
+                        <p className="text-sm text-slate-700">{getDisplayValue(selectedDetail.data.name)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Cliente</p>
+                        <p className="text-sm text-slate-700">{getDisplayValue(selectedDetail.data.client)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Status</p>
+                        <p className="text-sm text-slate-700">{getServerStatusLabel(selectedDetail.data.status)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Status do Backup</p>
+                        <p className="text-sm text-slate-700">{getBackupStatusLabel(selectedDetail.data.backupStatus)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Ultimo Backup</p>
+                        <p className="text-sm text-slate-700">{getDisplayValue(selectedDetail.data.lastBackup)}</p>
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-4">
+                      <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Rede e Acesso</h3>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Endereco IP</p>
+                        <p className="text-sm text-slate-700 font-mono">{getDisplayValue(selectedDetail.data.ip)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Porta</p>
+                        <p className="text-sm text-slate-700 font-mono">{getDisplayValue(selectedDetail.data.port)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Endpoint</p>
+                        <p className="text-sm text-slate-700 font-mono break-all">{getDisplayValue(selectedDetail.data.endpoint)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Ponto de Referencia</p>
+                        <p className="text-sm text-slate-700">{getDisplayValue(selectedDetail.data.referencePoint)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Usuario MikroTik</p>
+                        <p className="text-sm text-slate-700">{getDisplayValue(selectedDetail.data.mikrotikUser)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Senha MikroTik</p>
+                        <p className="text-sm text-slate-700 font-mono">{maskSecret(selectedDetail.data.mikrotikPassword)}</p>
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-4">
+                      <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Ambiente</h3>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Sistema Operacional</p>
+                        <p className="text-sm text-slate-700">{getDisplayValue(selectedDetail.data.os)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Hardware</p>
+                        <p className="text-sm text-slate-700">{getDisplayValue(selectedDetail.data.hardware)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Conectividade Atual</p>
+                        <p className="text-sm text-slate-700">
+                          {pingStatus[selectedDetail.data.id]
+                            ? pingStatus[selectedDetail.data.id].isOnline
+                              ? 'Conectado'
+                              : 'Desconectado'
+                            : 'Sem medicao'}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Latencia</p>
+                        <p className="text-sm text-slate-700">
+                          {pingStatus[selectedDetail.data.id]
+                            ? `${pingStatus[selectedDetail.data.id].latency}ms`
+                            : 'Sem medicao'}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Ultima Verificacao</p>
+                        <p className="text-sm text-slate-700">
+                          {pingStatus[selectedDetail.data.id]
+                            ? new Date(pingStatus[selectedDetail.data.id].lastCheck).toLocaleString()
+                            : 'Sem medicao'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-3">
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Observacoes</h3>
+                    <p className="text-sm text-slate-700 whitespace-pre-wrap">{getDisplayValue(selectedDetail.data.notes)}</p>
+                  </div>
+                </>
+              ) : (
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-4">
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Ponto</h3>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">ID</p>
+                      <p className="text-sm text-slate-700 font-mono break-all">{getDisplayValue(selectedDetail.data.id)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Nome do Ponto</p>
+                      <p className="text-sm text-slate-700">{getDisplayValue(selectedDetail.data.name)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Fornecedor</p>
+                      <p className="text-sm text-slate-700">{getDisplayValue(selectedDetail.data.providerName)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Cidade</p>
+                      <p className="text-sm text-slate-700">{getDisplayValue(selectedDetail.data.providerCity)}</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-4">
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Acesso do Equipamento</h3>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Usuario</p>
+                      <p className="text-sm text-slate-700">{getDisplayValue(selectedDetail.data.equipmentUser)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Senha</p>
+                      <p className="text-sm text-slate-700 font-mono">{maskSecret(selectedDetail.data.equipmentPassword)}</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-4">
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Titular do Cadastro</h3>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Titular</p>
+                      <p className="text-sm text-slate-700">{getDisplayValue(selectedDetail.data.providerHolder)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">CPF / CNPJ</p>
+                      <p className="text-sm text-slate-700">{getDisplayValue(selectedDetail.data.providerCpfCnpj)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Telefone</p>
+                      <p className="text-sm text-slate-700">{getDisplayValue(selectedDetail.data.providerContact)}</p>
+                    </div>
+                  </div>
+
+                  <div className="xl:col-span-3 bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-3">
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Observacoes</h3>
+                    <p className="text-sm text-slate-700 whitespace-pre-wrap">{getDisplayValue(selectedDetail.data.notes)}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-10 text-center text-slate-500">
+              Selecione um servidor ou ponto cadastrado para visualizar os detalhes.
+            </div>
+          )
         ) : (
           <div className="space-y-6">
             <div className="max-w-2xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">

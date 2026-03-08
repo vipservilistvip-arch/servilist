@@ -34,6 +34,18 @@ Um aplicativo de gerenciamento de servidores com funcionalidades de monitorament
 npm run dev
 ```
 
+Backend Flask em outra aba do terminal:
+```bash
+npm run dev:api
+```
+
+O frontend Vite faz proxy de `/api` para `http://127.0.0.1:5000`, entao o backend precisa estar rodando junto no desenvolvimento.
+
+Para subir os dois juntos no mesmo terminal:
+```bash
+npm run dev:all
+```
+
 ### Build para Produção
 ```bash
 npm run build
